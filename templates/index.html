@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Symbolic Control Framework</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 Symbolic Control Framework</h1>
+            <p>N-Dimensional Symbolic Controller Synthesis with LLM Integration</p>
+        </header>
+
+        <div class="main-panel">
+            <!-- Left Panel - Configuration -->
+            <div class="panel config-panel">
+                <h2>Configuration</h2>
+
+                <div class="section">
+                    <h3>Hardware</h3>
+                    <label for="cpu_cores">CPU Cores:</label>
+                    <input type="number" id="cpu_cores" min="1" max="32" value="4">
+
+                    <label for="use_gpu">
+                        <input type="checkbox" id="use_gpu"> Use GPU (if available)
+                    </label>
+
+                    <button onclick="updateConfig()" class="primary-btn">Update Hardware</button>
+                </div>
+
+                <!-- ADDED: Robot Model Section -->
+                <div class="section">
+                    <h3>Robot Model</h3>
+                    <select id="model_select">
+                        <option value="">Select a model...</option>
+                    </select>
+
+                    <div id="model_params" style="display:none;">
+                        <h4>Partition Resolution</h4>
+                        <div id="resolution_inputs"></div>
+                    </div>
+
+                    <button onclick="selectModel(event)" class="primary-btn" id="loadModelBtn">Load Model</button>
+                    <div id="model_status" class="status-box"></div>
+                </div>
+
+                <div class="section">
+                    <h3>Workspace</h3>
+                    <canvas id="workspace_canvas" width="400" height="400"></canvas>
+                    <div class="button-group">
+                        <button onclick="drawRectangle()" class="secondary-btn">Draw Region</button>
+                        <button onclick="clearCanvas()" class="secondary-btn">Clear</button>
+                    </div>
+                    <div id="region_list" class="region-list"></div>
+                </div>
+            </div>
+
+            <!-- Middle Panel - LLM & Synthesis -->
+            <div class="panel synthesis-panel">
+                <h2>Specification</h2>
+
+                <div class="section">
+                    <h3>Natural Language Prompt</h3>
+                    <textarea id="prompt_input" rows="4"
+                        placeholder="Describe what you want the robot to do... (e.g., 'Go to red region, then go to blue region')"></textarea>
+                    <button onclick="generateAutomaton()" class="primary-btn" id="generateBtn">Generate Automaton</button>
+                </div>
+
+                <div class="section" id="automaton_display" style="display:none;">
+                    <h3>Generated Automaton</h3>
+                    <pre id="automaton_json" class="json-display"></pre>
+                </div>
+
+                <div class="section">
+                    <h3>Abstraction</h3>
+                    <button onclick="buildAbstraction(event)" class="primary-btn" id="buildBtn" disabled>Build Symbolic Model</button>
+                    <div id="abstraction_stats" class="stats-box"></div>
+                </div>
+
+                <div class="section">
+                    <h3>Synthesis</h3>
+                    <button onclick="synthesize(event)" class="primary-btn" id="synthesizeBtn" disabled>Synthesize Controller</button>
+                    <div id="synthesis_stats" class="stats-box"></div>
+                </div>
+            </div>
+
+            <!-- Right Panel - Simulation & Visualization -->
+            <div class="panel viz-panel">
+                <h2>Simulation</h2>
+
+                <div class="section">
+                    <h3>Initial State</h3>
+                    <div id="initial_state_inputs" class="state-inputs"></div>
+                    <button onclick="runSimulation(event)" class="primary-btn" id="simulateBtn" disabled>Run Simulation</button>
+                </div>
+
+                <div class="section">
+                    <h3>Visualization</h3>
+                    <div id="plot_container" class="plot-container"></div>
+                </div>
+
+                <div class="section">
+                    <h3>Export</h3>
+                    <button onclick="exportController()" class="secondary-btn" id="exportBtn" disabled>Export Controller</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Debug Panel -->
+    <div id="debug-panel" class="debug-panel" style="display: none;">
+        <h4>🐛 Debug Log</h4>
+        <div id="debug-log"></div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+
+    <script>
+    // Debug logging
+    function debugLog(message) {
+        console.log(message);
+        const log = document.getElementById('debug-log');
+        if (log) {
+            const entry = document.createElement('div');
+            entry.textContent = new Date().toLocaleTimeString() + ': ' + message;
+            log.appendChild(entry);
+            // Keep only last 10 messages
+            while (log.children.length > 10) {
+                log.removeChild(log.firstChild);
+            }
+        }
+    }
+
+    // Override functions with debug logging
+    const originalBuild = buildAbstraction;
+    window.buildAbstraction = function(e) {
+        debugLog('Building abstraction with regions: ' + JSON.stringify(regions));
+        return originalBuild(e);
+    };
+
+    const originalSynthesize = synthesize;
+    window.synthesize = function(e) {
+        debugLog('Synthesizing controller...');
+        return originalSynthesize(e);
+    };
+
+    const originalGenerate = generateAutomaton;
+    window.generateAutomaton = function() {
+        debugLog('Generating automaton...');
+        return originalGenerate();
+    };
+
+    const originalRunSim = runSimulation;
+    window.runSimulation = function(e) {
+        debugLog('Running simulation...');
+        return originalRunSim(e);
+    };
+
+    // Toggle debug panel with Ctrl+Shift+D
+    document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+            const panel = document.getElementById('debug-panel');
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+            debugLog('Debug panel toggled');
+        }
+    });
+
+    // Initialize on load
+    document.addEventListener('DOMContentLoaded', function() {
+        debugLog('Page loaded, initializing...');
+        if (typeof loadConfig === 'function') loadConfig();
+        if (typeof setupCanvas === 'function') setupCanvas();
+    });
+    </script>
+</body>
+</html>
