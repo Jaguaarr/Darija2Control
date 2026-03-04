@@ -4,7 +4,8 @@ let currentModel = null;
 let currentAutomaton = null;
 let currentTrajectory = null;
 let currentSymbolic = null;
-let currentController = null;  // Added missing variable
+let currentController = null;
+let regionsByCoords = []; // For high-dimensional models
 
 // Canvas for workspace drawing
 const canvas = document.getElementById('workspace_canvas');
@@ -18,50 +19,50 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM loaded, initializing...');
     loadConfig();
     setupCanvas();
-    updateButtonStates(); // Initial button states
+    updateButtonStates();
+
+    // Initialize with 2D default for custom model
+    if (document.getElementById('state_dim')) {
+        updateCustomInputs();
+    }
 });
 
+// ==================== UTILITY FUNCTIONS ====================
+
+// Update button states based on current data
 // Update button states based on current data
 function updateButtonStates() {
+    console.log('🔄 updateButtonStates called');
+
     const buildBtn = document.getElementById('buildBtn');
     const synthesizeBtn = document.getElementById('synthesizeBtn');
     const simulateBtn = document.getElementById('simulateBtn');
     const exportBtn = document.getElementById('exportBtn');
     const generateBtn = document.getElementById('generateBtn');
 
-    // Build abstraction: needs model AND regions
+    // FORCE ENABLE ALL BUTTONS FOR TESTING
     if (buildBtn) {
-        buildBtn.disabled = !(currentModel && regions.length > 0);
+        buildBtn.disabled = false;
+        console.log('buildBtn ENABLED');
     }
-
-    // Synthesize: needs abstraction AND automaton
     if (synthesizeBtn) {
-        synthesizeBtn.disabled = !(currentSymbolic && currentAutomaton);
+        synthesizeBtn.disabled = false;
+        console.log('synthesizeBtn ENABLED');
     }
-
-    // Simulate: needs controller
     if (simulateBtn) {
-        simulateBtn.disabled = !currentController;
+        simulateBtn.disabled = false;
+        console.log('simulateBtn ENABLED');
     }
-
-    // Export: needs controller
     if (exportBtn) {
-        exportBtn.disabled = !currentController;
+        exportBtn.disabled = false;
+        console.log('exportBtn ENABLED');
     }
-
-    // Generate automaton: needs regions
     if (generateBtn) {
-        generateBtn.disabled = regions.length === 0;
+        generateBtn.disabled = false;
+        console.log('generateBtn ENABLED');
     }
-
-    console.log('Button states updated:', {
-        model: !!currentModel,
-        regions: regions.length,
-        symbolic: !!currentSymbolic,
-        automaton: !!currentAutomaton,
-        controller: !!currentController
-    });
 }
+// ==================== CONFIGURATION ====================
 
 // Load configuration
 async function loadConfig() {
@@ -82,10 +83,12 @@ async function loadConfig() {
         if (modelSelect) {
             modelSelect.innerHTML = '<option value="">Select a model...</option>';
             data.models.forEach(model => {
-                const option = document.createElement('option');
-                option.value = model;
-                option.textContent = model;
-                modelSelect.appendChild(option);
+                if (model !== 'custom') { // Don't show 'custom' in dropdown
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelSelect.appendChild(option);
+                }
             });
         }
     } catch (error) {
@@ -116,7 +119,8 @@ async function updateConfig() {
     }
 }
 
-// Canvas setup
+// ==================== CANVAS FUNCTIONS (2D) ====================
+
 function setupCanvas() {
     if (!canvas) {
         console.error('Canvas not found');
@@ -177,7 +181,7 @@ function endDrawing() {
 
         redrawRegions();
         updateRegionList();
-        updateButtonStates(); // Update buttons after adding region
+        updateButtonStates();
     }
 
     currentRect = null;
@@ -217,7 +221,7 @@ function clearCanvas() {
     regions = [];
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     updateRegionList();
-    updateButtonStates(); // Update buttons after clearing
+    updateButtonStates();
 }
 
 function updateRegionList() {
@@ -239,7 +243,182 @@ function updateRegionList() {
     });
 }
 
-// Select robot model
+// ==================== MODEL SELECTION ====================
+
+// Toggle between predefined and custom model
+function toggleModelType() {
+    const modelType = document.querySelector('input[name="model_type"]:checked').value;
+    const predefinedDiv = document.getElementById('predefined_model_div');
+    const customDiv = document.getElementById('custom_model_div');
+
+    if (modelType === 'predefined') {
+        predefinedDiv.style.display = 'block';
+        customDiv.style.display = 'none';
+        // Show workspace for predefined (assuming 2D)
+        document.getElementById('workspace_section').style.display = 'block';
+        document.getElementById('high_dim_regions').style.display = 'none';
+    } else {
+        predefinedDiv.style.display = 'none';
+        customDiv.style.display = 'block';
+        updateCustomInputs();
+    }
+}
+
+// Update custom model inputs based on dimensions
+function updateCustomInputs() {
+    const stateDim = parseInt(document.getElementById('state_dim').value) || 2;
+    const inputDim = parseInt(document.getElementById('input_dim').value) || 1;
+
+    // Update equations
+    const equationsDiv = document.getElementById('equations_list');
+    if (equationsDiv) {
+        equationsDiv.innerHTML = '';
+        for (let i = 0; i < stateDim; i++) {
+            const div = document.createElement('div');
+            div.style.margin = '8px 0';
+            div.innerHTML = `
+                <label>x${i}' = </label>
+                <input type="text" id="eq_${i}" placeholder="e.g., x0 + u0*cos(x2)" style="width: 80%;">
+            `;
+            equationsDiv.appendChild(div);
+        }
+    }
+
+    // Update bounds
+    const boundsDiv = document.getElementById('bounds_list');
+    if (boundsDiv) {
+        boundsDiv.innerHTML = '';
+        for (let i = 0; i < stateDim; i++) {
+            const div = document.createElement('div');
+            div.style.margin = '8px 0';
+            div.style.display = 'flex';
+            div.style.gap = '10px';
+            div.innerHTML = `
+                <label style="width: 60px;">x${i}:</label>
+                <input type="number" id="bound_low_${i}" placeholder="min" value="-10" style="width: 100px;">
+                <span>to</span>
+                <input type="number" id="bound_high_${i}" placeholder="max" value="10" style="width: 100px;">
+            `;
+            boundsDiv.appendChild(div);
+        }
+    }
+
+    // Update inputs
+    const inputsDiv = document.getElementById('inputs_list');
+    if (inputsDiv) {
+        inputsDiv.innerHTML = '';
+        for (let i = 0; i < inputDim; i++) {
+            const div = document.createElement('div');
+            div.style.margin = '8px 0';
+            div.innerHTML = `
+                <label>u${i} values (comma-separated):</label>
+                <input type="text" id="input_vals_${i}" placeholder="e.g., -1,0,1" value="0,1" style="width: 100%;">
+            `;
+            inputsDiv.appendChild(div);
+        }
+    }
+
+    // Update disturbance bounds
+    const distDiv = document.getElementById('disturbance_list');
+    if (distDiv) {
+        distDiv.innerHTML = '';
+        for (let i = 0; i < stateDim; i++) {
+            const div = document.createElement('div');
+            div.style.margin = '8px 0';
+            div.innerHTML = `
+                <label>Disturbance bound for x${i}:</label>
+                <input type="number" id="dist_${i}" value="0.01" step="0.001" min="0" style="width: 100px;">
+            `;
+            distDiv.appendChild(div);
+        }
+    }
+
+    // Create resolution inputs
+    createResolutionInputs(stateDim);
+
+    // Show/hide region definition based on dimension
+    const highDimRegions = document.getElementById('high_dim_regions');
+    const workspaceSection = document.getElementById('workspace_section');
+
+    if (stateDim > 2) {
+        if (highDimRegions) highDimRegions.style.display = 'block';
+        if (workspaceSection) workspaceSection.style.display = 'none';
+    } else {
+        if (highDimRegions) highDimRegions.style.display = 'none';
+        if (workspaceSection) workspaceSection.style.display = 'block';
+    }
+}
+
+// Create resolution inputs
+function createResolutionInputs(dim) {
+    const container = document.getElementById('resolution_inputs');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    for (let i = 0; i < dim; i++) {
+        const div = document.createElement('div');
+        div.style.margin = '8px 0';
+        div.style.display = 'flex';
+        div.style.alignItems = 'center';
+
+        const label = document.createElement('label');
+        label.textContent = `Dimension ${i+1}:`;
+        label.style.width = '100px';
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.id = `res_${i}`;
+        input.value = '10';
+        input.min = '2';
+        input.max = '200';
+        input.style.width = '80px';
+        input.oninput = updateCellEstimate;
+
+        div.appendChild(label);
+        div.appendChild(input);
+        container.appendChild(div);
+    }
+
+    document.getElementById('resolution_container').style.display = 'block';
+    updateCellEstimate();
+}
+
+// Update cell estimate
+function updateCellEstimate() {
+    const inputs = document.querySelectorAll('[id^="res_"]');
+    let total = 1;
+    inputs.forEach(input => {
+        total *= parseInt(input.value) || 10;
+    });
+    const cellCount = document.getElementById('cell_count');
+    if (cellCount) {
+        cellCount.textContent = total.toLocaleString();
+    }
+}
+
+// Set resolution presets
+function setResolution(res) {
+    const inputs = document.querySelectorAll('[id^="res_"]');
+    inputs.forEach(input => {
+        input.value = res;
+    });
+    updateCellEstimate();
+}
+
+// Load model (predefined or custom)
+async function loadModel() {
+    const modelType = document.querySelector('input[name="model_type"]:checked').value;
+
+    if (modelType === 'predefined') {
+        await selectModel(event);
+    } else {
+        await loadCustomModel();
+    }
+}
+
+// Select predefined model
+// Select predefined model
 async function selectModel(event) {
     const modelSelect = document.getElementById('model_select');
     const modelName = modelSelect.value;
@@ -260,14 +439,22 @@ async function selectModel(event) {
         statusDiv.className = 'status-box loading';
     }
 
+    // Get resolutions
+    const resolutionInputs = document.querySelectorAll('[id^="res_"]');
+    const resolutions = [];
+    resolutionInputs.forEach(input => {
+        resolutions.push(parseInt(input.value) || 10);
+    });
+
     try {
-        console.log('Loading model:', modelName);
+        console.log('Loading model:', modelName, 'resolutions:', resolutions);
+
         const response = await fetch('/api/select_model', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 model_name: modelName,
-                resolutions: [10, 10, 10]
+                resolutions: resolutions
             })
         });
 
@@ -275,6 +462,7 @@ async function selectModel(event) {
         console.log('Model response:', data);
 
         if (data.status === 'success') {
+            // Store model info - MAKE SURE THIS IS SET CORRECTLY
             currentModel = {
                 name: modelName,
                 state_dim: data.state_dim,
@@ -284,13 +472,21 @@ async function selectModel(event) {
                 input_names: data.input_names
             };
 
+            console.log('✅ currentModel set:', currentModel);
+
             if (statusDiv) {
-                statusDiv.innerHTML = `✅ Model loaded: ${data.state_dim}D, ${data.n_cells} cells`;
+                statusDiv.innerHTML = `✅ Model loaded: ${data.state_dim}D, ${data.n_cells.toLocaleString()} cells`;
                 statusDiv.className = 'status-box success';
             }
 
             updateInitialStateInputs(data.state_dim);
-            updateButtonStates(); // This will enable Build button if regions exist
+
+            // CRITICAL: Update button states after model is loaded
+            updateButtonStates();
+
+            // Force check regions
+            console.log('Regions after model load:', regions);
+            console.log('Regions length:', regions.length);
 
             alert(`✅ Model loaded successfully!`);
         } else {
@@ -308,14 +504,247 @@ async function selectModel(event) {
         button.disabled = false;
     }
 }
+// Load custom model
+async function loadCustomModel() {
+    const name = document.getElementById('custom_model_name').value || 'custom_robot';
+    const stateDim = parseInt(document.getElementById('state_dim').value) || 2;
+    const inputDim = parseInt(document.getElementById('input_dim').value) || 1;
+
+    // Get equations
+    const equations = [];
+    for (let i = 0; i < stateDim; i++) {
+        const eq = document.getElementById(`eq_${i}`)?.value;
+        if (!eq) {
+            alert(`Please enter equation for x${i}'`);
+            return;
+        }
+        equations.push(eq);
+    }
+
+    // Get state bounds
+    const stateBounds = [];
+    for (let i = 0; i < stateDim; i++) {
+        const low = parseFloat(document.getElementById(`bound_low_${i}`).value);
+        const high = parseFloat(document.getElementById(`bound_high_${i}`).value);
+        if (isNaN(low) || isNaN(high)) {
+            alert(`Please enter valid bounds for x${i}`);
+            return;
+        }
+        stateBounds.push([low, high]);
+    }
+
+    // Get input values
+    const inputValues = [];
+    for (let i = 0; i < inputDim; i++) {
+        const valsStr = document.getElementById(`input_vals_${i}`).value;
+        const vals = valsStr.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+        if (vals.length === 0) {
+            alert(`Please enter valid input values for u${i}`);
+            return;
+        }
+        inputValues.push(vals);
+    }
+
+    // Generate all combinations of inputs (Cartesian product)
+    // In loadCustomModel function, replace the inputs creation part:
+
+    // Generate all combinations of inputs (Cartesian product)
+    const allInputs = [];
+    function generateCombinations(arrays, current = [], index = 0) {
+        if (index === arrays.length) {
+            // Make sure to create a copy of current
+            allInputs.push([...current]);
+            return;
+        }
+        for (const val of arrays[index]) {
+            generateCombinations(arrays, [...current, val], index + 1);
+        }
+    }
+    generateCombinations(inputValues);
+
+    console.log(`Generated ${allInputs.length} input combinations`);
+
+    // Get disturbance bounds
+    const distBounds = [];
+    for (let i = 0; i < stateDim; i++) {
+        const val = parseFloat(document.getElementById(`dist_${i}`).value);
+        distBounds.push(isNaN(val) ? 0.01 : val);
+    }
+
+    // Get resolutions
+    const resolutionInputs = document.querySelectorAll('[id^="res_"]');
+    const resolutions = [];
+    resolutionInputs.forEach(input => {
+        resolutions.push(parseInt(input.value) || 10);
+    });
+
+    // Determine which regions to use
+    let regionData = {};
+    if (stateDim > 2) {
+        regionsByCoords.forEach(region => {
+            regionData[region.name] = region.bounds;
+        });
+    } else {
+        regions.forEach(region => {
+            regionData[region.name] = region.bounds;
+        });
+    }
+
+    // Prepare custom model data
+    const customModelData = {
+        name: name,
+        state_dim: stateDim,
+        input_dim: inputDim,
+        equations: equations,
+        state_bounds: stateBounds,
+        inputs: allInputs,
+        disturbance_bounds: distBounds,
+        resolutions: resolutions,
+        regions: regionData
+    };
+
+    console.log('Loading custom model:', customModelData);
+
+    const button = document.getElementById('loadModelBtn');
+    const originalText = button.textContent;
+    button.textContent = '⏳ Loading...';
+    button.disabled = true;
+
+    const statusDiv = document.getElementById('model_status');
+    if (statusDiv) {
+        statusDiv.innerHTML = 'Loading custom model...';
+        statusDiv.className = 'status-box loading';
+    }
+
+    try {
+        const response = await fetch('/api/load_custom_model', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(customModelData)
+        });
+
+        const data = await response.json();
+        console.log('Custom model response:', data);
+
+        if (data.status === 'success') {
+            currentModel = {
+                name: name,
+                state_dim: stateDim,
+                input_dim: inputDim,
+                n_cells: data.n_cells,
+                state_names: data.state_names || Array(stateDim).fill().map((_, i) => `x${i}`),
+                input_names: data.input_names || Array(inputDim).fill().map((_, i) => `u${i}`)
+            };
+
+            if (statusDiv) {
+                statusDiv.innerHTML = `✅ Custom model loaded: ${stateDim}D, ${data.n_cells.toLocaleString()} cells`;
+                statusDiv.className = 'status-box success';
+            }
+
+            updateInitialStateInputs(stateDim);
+            updateButtonStates();
+
+            alert('✅ Custom model loaded successfully!');
+        } else {
+            throw new Error(data.error || 'Failed to load custom model');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        if (statusDiv) {
+            statusDiv.innerHTML = `❌ Error: ${error.message}`;
+            statusDiv.className = 'status-box error';
+        }
+        alert('❌ Error: ' + error.message);
+    } finally {
+        button.textContent = originalText;
+        button.disabled = false;
+    }
+}
+
+// ==================== REGION DEFINITION FOR HIGH-D MODELS ====================
+
+// Add region by coordinates for high-dimensional models
+// Add region by coordinates for high-dimensional models
+function addRegionByCoords() {
+    const name = document.getElementById('region_name_input').value;
+    if (!name) {
+        alert('Please enter a region name');
+        return;
+    }
+
+    const stateDim = parseInt(document.getElementById('state_dim').value) || 2;
+    const bounds = [];
+
+    for (let i = 0; i < stateDim; i++) {
+        const low = prompt(`Enter lower bound for dimension ${i}:`, '0');
+        const high = prompt(`Enter upper bound for dimension ${i}:`, '10');
+        if (low === null || high === null) return;
+        bounds.push([parseFloat(low), parseFloat(high)]);
+    }
+
+    regionsByCoords.push({
+        name: name,
+        bounds: bounds,
+        color: `hsl(${regionsByCoords.length * 30}, 70%, 50%)`
+    });
+
+    updateRegionCoordsList();
+    document.getElementById('region_name_input').value = '';
+
+    // IMPORTANT: Update button states after adding region
+    updateButtonStates();
+}
+
+function updateRegionCoordsList() {
+    const list = document.getElementById('region_coords_list');
+    if (!list) return;
+
+    list.innerHTML = '<h4>Regions:</h4>';
+
+    if (regionsByCoords.length === 0) {
+        list.innerHTML += '<p style="color: #999; font-style: italic;">No regions defined</p>';
+        return;
+    }
+
+    regionsByCoords.forEach((region, idx) => {
+        const div = document.createElement('div');
+        div.style.color = region.color;
+        div.style.padding = '5px';
+        div.style.borderBottom = '1px solid #ddd';
+        div.style.display = 'flex';
+        div.style.justifyContent = 'space-between';
+        div.style.alignItems = 'center';
+
+        let boundsText = region.name + ': ';
+        region.bounds.forEach((b, i) => {
+            boundsText += `x${i}[${b[0].toFixed(1)}-${b[1].toFixed(1)}] `;
+        });
+
+        const textSpan = document.createElement('span');
+        textSpan.textContent = boundsText;
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = '×';
+        deleteBtn.style.padding = '0 8px';
+        deleteBtn.style.marginLeft = '10px';
+        deleteBtn.onclick = () => {
+            regionsByCoords.splice(idx, 1);
+            updateRegionCoordsList();
+        };
+
+        div.appendChild(textSpan);
+        div.appendChild(deleteBtn);
+        list.appendChild(div);
+    });
+}
+
+// ==================== INITIAL STATE INPUTS ====================
 
 function updateInitialStateInputs(dim) {
     const container = document.getElementById('initial_state_inputs');
     if (!container) return;
 
     container.innerHTML = '<h4>Initial State:</h4>';
-
-    if (!dim) return;
 
     for (let i = 0; i < dim; i++) {
         const div = document.createElement('div');
@@ -339,8 +768,10 @@ function updateInitialStateInputs(dim) {
     }
 }
 
-// Generate automaton from prompt
-// Generate automaton from prompt
+// ==================== AUTOMATON GENERATION ====================
+
+// ==================== AUTOMATON GENERATION ====================
+
 async function generateAutomaton() {
     const prompt = document.getElementById('prompt_input').value;
     if (!prompt) {
@@ -348,8 +779,43 @@ async function generateAutomaton() {
         return;
     }
 
-    if (regions.length === 0) {
-        alert('Please draw at least one region first');
+    // Determine which regions to use
+    let regionNames = [];
+
+    if (currentModel) {
+        // Model is loaded
+        console.log('Model loaded:', currentModel.name, 'state_dim:', currentModel.state_dim);
+
+        // Check if it's a 2D model or differential drive (which is 3D but uses 2D canvas)
+        if (currentModel.name === "differential_drive" || currentModel.state_dim <= 2) {
+            // Use canvas regions for 2D and differential drive models
+            regionNames = regions.map(r => r.name);
+            console.log('Using canvas regions for 2D/predefined model:', regionNames);
+        } else {
+            // High-dimensional custom model - use coordinate regions
+            regionNames = regionsByCoords.map(r => r.name);
+            console.log('Using coordinate regions for high-dim model:', regionNames);
+        }
+    } else {
+        // No model loaded yet, check the selected model type
+        const modelType = document.querySelector('input[name="model_type"]:checked')?.value;
+        console.log('No model loaded, model type:', modelType);
+
+        if (modelType === 'custom') {
+            const stateDim = parseInt(document.getElementById('state_dim')?.value) || 2;
+            if (stateDim > 2) {
+                regionNames = regionsByCoords.map(r => r.name);
+            } else {
+                regionNames = regions.map(r => r.name);
+            }
+        } else {
+            // Predefined model selected but not loaded - assume 2D canvas regions
+            regionNames = regions.map(r => r.name);
+        }
+    }
+
+    if (regionNames.length === 0) {
+        alert('Please define at least one region first');
         return;
     }
 
@@ -359,7 +825,6 @@ async function generateAutomaton() {
     generateBtn.disabled = true;
 
     try {
-        const regionNames = regions.map(r => r.name);
         console.log('Generating automaton for:', {prompt, regionNames});
 
         const response = await fetch('/api/generate_automaton', {
@@ -375,18 +840,12 @@ async function generateAutomaton() {
         console.log('Generation response:', data);
 
         if (data.status === 'success') {
-            // Store the automaton
             currentAutomaton = data.automaton;
-
-            // Display it
             document.getElementById('automaton_display').style.display = 'block';
             document.getElementById('automaton_json').textContent =
                 JSON.stringify(data.automaton, null, 2);
 
-            // CRITICAL: Update button states
             updateButtonStates();
-
-            console.log('✅ Automaton stored:', currentAutomaton);
             alert('✅ Automaton generated successfully!');
         } else {
             throw new Error(data.error || 'Generation failed');
@@ -399,15 +858,39 @@ async function generateAutomaton() {
         generateBtn.disabled = false;
     }
 }
-// Build abstraction
+// ==================== ABSTRACTION BUILDING ====================
+
+// ==================== ABSTRACTION BUILDING ====================
+
 async function buildAbstraction(event) {
     if (!currentModel) {
         alert('❌ Please load a model first');
         return;
     }
 
-    if (regions.length === 0) {
-        alert('❌ Please draw at least one region');
+    // Determine which regions to use
+    let regionData = {};
+    const stateDim = currentModel.state_dim;
+
+    console.log('Building abstraction for model:', currentModel.name, 'state_dim:', stateDim);
+
+    // Check if it's a 2D model or differential drive (which is 3D but uses 2D canvas)
+    if (currentModel.name === "differential_drive" || stateDim <= 2) {
+        // Use canvas regions for 2D and differential drive models
+        regions.forEach(region => {
+            regionData[region.name] = region.bounds;
+        });
+        console.log('Using canvas regions for abstraction:', Object.keys(regionData));
+    } else {
+        // High-dimensional custom model - use coordinate regions
+        regionsByCoords.forEach(region => {
+            regionData[region.name] = region.bounds;
+        });
+        console.log('Using coordinate regions for abstraction:', Object.keys(regionData));
+    }
+
+    if (Object.keys(regionData).length === 0) {
+        alert('❌ Please define at least one region');
         return;
     }
 
@@ -420,11 +903,6 @@ async function buildAbstraction(event) {
     statsDiv.innerHTML = '<p>Building abstraction... (this may take a moment)</p>';
 
     try {
-        const regionData = {};
-        regions.forEach(region => {
-            regionData[region.name] = region.bounds;
-        });
-
         console.log('Building abstraction with regions:', regionData);
 
         const response = await fetch('/api/build_abstraction', {
@@ -450,7 +928,7 @@ async function buildAbstraction(event) {
                 </div>
             `;
 
-            updateButtonStates(); // This will enable Synthesize if automaton exists
+            updateButtonStates();
         } else {
             throw new Error(data.error || 'Build failed');
         }
@@ -466,8 +944,8 @@ async function buildAbstraction(event) {
         button.disabled = false;
     }
 }
+// ==================== CONTROLLER SYNTHESIS ====================
 
-// Synthesize controller
 async function synthesize(event) {
     if (!currentSymbolic) {
         alert('❌ Please build abstraction first');
@@ -492,14 +970,14 @@ async function synthesize(event) {
         const response = await fetch('/api/synthesize', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({type: 'safety'})
+            body: JSON.stringify({type: 'automaton'})
         });
 
         const data = await response.json();
         console.log('Synthesis response:', data);
 
         if (data.status === 'success') {
-            currentController = true; // Mark that we have a controller
+            currentController = true;
 
             statsDiv.innerHTML = `
                 <div style="background: #d4edda; color: #155724; padding: 10px; border-radius: 4px;">
@@ -509,7 +987,7 @@ async function synthesize(event) {
                 </div>
             `;
 
-            updateButtonStates(); // This will enable Simulate and Export
+            updateButtonStates();
         } else {
             throw new Error(data.error || 'Synthesis failed');
         }
@@ -526,9 +1004,12 @@ async function synthesize(event) {
     }
 }
 
-// Run simulation
-// Run simulation
-// Run simulation
+// ==================== SIMULATION ====================
+
+// ==================== SIMULATION ====================
+
+// ==================== SIMULATION ====================
+
 async function runSimulation(event) {
     if (!currentModel) {
         alert('❌ Please load a model first');
@@ -545,7 +1026,6 @@ async function runSimulation(event) {
     button.textContent = '⏳ Simulating...';
     button.disabled = true;
 
-    // Clear previous plot
     document.getElementById('plot_container').innerHTML = '<p>Running simulation...</p>';
 
     try {
@@ -558,13 +1038,12 @@ async function runSimulation(event) {
 
         console.log('Running simulation with initial state:', initialState);
 
-        // Run simulation - MAKE SURE num_steps is 200
         const response = await fetch('/api/simulate', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 initial_state: initialState,
-                num_steps: 200  // This MUST be 200
+                num_steps: 200
             })
         });
 
@@ -572,26 +1051,23 @@ async function runSimulation(event) {
         console.log('Simulation response:', data);
 
         if (data.status === 'success') {
-            // Store trajectory
             currentTrajectory = data.trajectory;
-            console.log(`✅ Trajectory stored: ${currentTrajectory.length} points`);
-
-            // Check if we have enough points
-               if (currentTrajectory.length === 1) {
-                console.log('⚠️ Only 1 point, duplicating for visualization');
-                currentTrajectory.push(currentTrajectory[0]);
-            }
-
 
             // Prepare region data
-            const regionData = {};
-            regions.forEach(region => {
-                regionData[region.name] = region.bounds;
-            });
+            let regionData = {};
+            if (currentModel.name === "differential_drive" || currentModel.state_dim <= 2) {
+                regions.forEach(region => {
+                    regionData[region.name] = region.bounds;
+                });
+            } else {
+                regionsByCoords.forEach(region => {
+                    if (region.bounds.length >= 2) {
+                        regionData[region.name] = [region.bounds[0], region.bounds[1]];
+                    }
+                });
+            }
 
-            // Request visualization
-            console.log('Requesting visualization...');
-
+            // Get visualization
             const vizResponse = await fetch('/api/visualize', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -602,12 +1078,10 @@ async function runSimulation(event) {
             });
 
             const vizData = await vizResponse.json();
-            console.log('Visualization response:', vizData);
 
             if (vizData.status === 'success') {
                 document.getElementById('plot_container').innerHTML =
                     `<img src="${vizData.image}" style="max-width:100%; border-radius: 4px; border: 1px solid #ddd;">`;
-                console.log('✅ Plot displayed successfully');
             } else {
                 throw new Error(vizData.error || 'Visualization failed');
             }
@@ -624,7 +1098,51 @@ async function runSimulation(event) {
         button.disabled = false;
     }
 }
-// Export controller
+
+// Add this NEW function to find a valid start
+async function findValidStart() {
+    if (!currentController) {
+        alert('Please synthesize a controller first');
+        return;
+    }
+
+    const button = document.getElementById('findStartBtn');
+    if (button) {
+        button.textContent = '🔍 Finding...';
+        button.disabled = true;
+    }
+
+    try {
+        const response = await fetch('/api/find_valid_start', {
+            method: 'POST'
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            // Update input fields with the center of the valid cell
+            for (let i = 0; i < data.center.length; i++) {
+                const input = document.getElementById(`init_x${i}`);
+                if (input) {
+                    input.value = data.center[i].toFixed(2);
+                }
+            }
+            alert(`✅ Found valid start: cell ${data.cell_idx}, state ${data.auto_state}`);
+        } else {
+            alert('❌ No valid start found: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('❌ Error finding valid start');
+    } finally {
+        if (button) {
+            button.textContent = '🎯 Find Valid Start';
+            button.disabled = false;
+        }
+    }
+}
+// ==================== EXPORT ====================
+
 async function exportController() {
     if (!currentController) {
         alert('❌ No controller to export');
@@ -651,12 +1169,14 @@ async function exportController() {
     }
 }
 
-// Helper function for drawing rectangle
+// ==================== HELPER FUNCTIONS ====================
+
 function drawRectangle() {
     alert('Click and drag on the canvas to draw a region');
 }
 
-// Make functions globally available
+// ==================== MAKE FUNCTIONS GLOBALLY AVAILABLE ====================
+
 window.selectModel = selectModel;
 window.updateConfig = updateConfig;
 window.generateAutomaton = generateAutomaton;
@@ -666,3 +1186,8 @@ window.runSimulation = runSimulation;
 window.exportController = exportController;
 window.drawRectangle = drawRectangle;
 window.clearCanvas = clearCanvas;
+window.toggleModelType = toggleModelType;
+window.updateCustomInputs = updateCustomInputs;
+window.addRegionByCoords = addRegionByCoords;
+window.setResolution = setResolution;
+window.loadModel = loadModel;

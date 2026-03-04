@@ -34,22 +34,20 @@ class SynthesisEngine:
         self.symbolic = symbolic
         self.parallel = parallel or ParallelBackend()
 
-        # Precompute successor relation for product (SERIAL - no pickling issues)
+        # Precompute successor relation for product (using your working approach)
         print("🔄 Precomputing product successors...")
-        self.product_succ = self._precompute_product_successors_serial()
-        print(f"✅ Product successors precomputed for {len(self.product_succ)} states")
+        self.product_succ = self._precompute_product_successors()
+        print(f"✅ Product successors precomputed")
 
-    def _precompute_product_successors_serial(self) -> Dict[int, Dict[int, Set[int]]]:
-        """
-        Serial version of product successor precomputation.
-        Avoids pickling issues entirely.
-        """
+    def _precompute_product_successors(self) -> Dict[int, Dict[int, Set[int]]]:
+        """Precompute successors for all product states."""
         n_states = self.product.n_states
         n_inputs = self.symbolic.n_inputs
 
         succ = {s_idx: {u_idx: set() for u_idx in range(n_inputs)}
                 for s_idx in range(n_states)}
 
+        # Your working approach: iterate through all states and inputs
         for s_idx in range(n_states):
             if s_idx % 100 == 0:  # Progress indicator
                 print(f"  Computing successors for state {s_idx}/{n_states}")
@@ -59,223 +57,189 @@ class SynthesisEngine:
 
         return succ
 
+    def Pre_fast(self, R_idx_set: Set[int]) -> List[int]:
+        """
+        YOUR working Pre_fast function adapted.
+        R_idx_set: set of state indices that are in R
+        returns: list of state indices that are predecessors of R
+        """
+        res = []
+        for s_idx in range(self.product.n_states):
+            # Try each input; if at least ONE input has all successors in R, s_idx is in Pre(R)
+            for u_idx in range(self.symbolic.n_inputs):
+                succ_set = self.product_succ.get(s_idx, {}).get(u_idx, set())
+                if not succ_set:
+                    continue  # no successors for this input
+                # Check if ALL successors are inside R
+                if succ_set.issubset(R_idx_set):
+                    res.append(s_idx)
+                    break  # no need to check other inputs for this state
+        return res
+
+    def pointFixe_fast(self, Q_states: Set[ProductState]) -> List[ProductState]:
+        """
+        YOUR working pointFixe_fast function adapted for safety.
+        Q_states: set of product states that are safe
+        returns: list of product states belonging to the fixed point.
+        """
+        # Convert to indices
+        Q_idx = {self.product.state_to_idx[s] for s in Q_states}
+
+        # Fixed point: R_{k+1} = Pre(R_k) ∩ Q
+        R0 = set(Q_idx)
+        iteration = 0
+
+        while True:
+            iteration += 1
+            pre = self.Pre_fast(R0)
+            R1 = {i for i in pre if i in Q_idx}
+            print(f"  Iteration {iteration}: |R| = {len(R1)}")
+
+            if R1 == R0:
+                break
+            R0 = R1
+
+        # Decode back to ProductState objects
+        return [self.product.states[i] for i in R0]
+
     def synthesize_safety(self, safe_set: Set[ProductState]) -> SymbolicController:
         """
-        Synthesize controller for safety specification.
-
-        Args:
-            safe_set: Set of product states that are safe
-
-        Returns:
-            Controller that keeps system within safe_set
+        Synthesize controller for safety specification using your working method.
         """
         print(f"🛡️ Synthesizing safety controller for {len(safe_set)} safe states...")
 
-        # Convert to indices
-        safe_indices = {self.product.state_to_idx[s] for s in safe_set}
-
-        # Start with all safe states
-        R = set(safe_indices)
-        iteration = 0
-
-        while True:
-            iteration += 1
-            # Pre(R) = states that can force staying in R for one step
-            pre = set()
-
-            for s_idx in range(self.product.n_states):
-                # Skip if not in safe set
-                if s_idx not in safe_indices:
-                    continue
-
-                # Check each input
-                for u_idx in range(self.symbolic.n_inputs):
-                    succs = self.product_succ.get(s_idx, {}).get(u_idx, set())
-                    if succs and all(s in R for s in succs):
-                        pre.add(s_idx)
-                        break
-
-            # New R = previous R ∩ Pre(R)
-            R_next = R.intersection(pre)
-
-            print(f"  Iteration {iteration}: |R| = {len(R_next)}")
-
-            if R_next == R:
-                break
-            R = R_next
-
-            if len(R) == 0:
-                print("  ⚠️ No winning states found!")
-                break
-
-        # Build controller
-        controller = SymbolicController()
-        winning_states = {self.product.states[idx] for idx in R}
+        # Get fixed point using your algorithm
+        winning_states = self.pointFixe_fast(safe_set)
+        winning_indices = {self.product.state_to_idx[s] for s in winning_states}
 
         print(f"✅ Safety synthesis complete: {len(winning_states)} winning states")
 
+        # Build controller
+        controller = SymbolicController()
+
         for state in winning_states:
             s_idx = self.product.state_to_idx[state]
-            allowed = []
+            allowed_inputs = []
 
             for u_idx, inp in enumerate(self.symbolic.inputs):
-                succs = self.product_succ[s_idx][u_idx]
-                if succs and all(s in R for s in succs):
-                    allowed.append(inp)
+                succ_set = self.product_succ.get(s_idx, {}).get(u_idx, set())
+                if not succ_set:
+                    continue
+                # Check condition: all successors in winning set
+                if succ_set.issubset(winning_indices):
+                    allowed_inputs.append(inp)
 
-            if allowed:
-                controller.add_control(state, allowed)
+            if allowed_inputs:
+                controller.add_control(state, allowed_inputs)
 
-        controller.winning_states = winning_states
+        controller.winning_states = set(winning_states)
         return controller
+
+    def pointFixeAtteignabilité_fast(self, Q_states: Set[ProductState]) -> Dict[ProductState, List[np.ndarray]]:
+        """
+        YOUR working pointFixeAtteignabilité_fast function adapted for reachability.
+        Q_states: set of product states that we want to reach (target set)
+        Returns: controller dict {state: [allowed_inputs]}
+        """
+        # Convert to indices
+        Q_idx = {self.product.state_to_idx[s] for s in Q_states}
+
+        # controller indexed by state index internally
+        controlleur_idx = {}
+
+        # INITIALIZATION
+        R0 = set(Q_idx)
+
+        # Pre(R0)
+        pre0 = self.Pre_fast(R0)
+
+        # R1 = Q ∪ Pre(Q)
+        R1 = R0.union(pre0)
+
+        # Initialize controller for all states in R1 \ Q
+        for s_idx in R1:
+            if s_idx not in Q_idx:  # only states that are not targets
+                if s_idx not in controlleur_idx:
+                    controlleur_idx[s_idx] = []
+                for u_idx, inp in enumerate(self.symbolic.inputs):
+                    succ_set = self.product_succ.get(s_idx, {}).get(u_idx, set())
+                    if succ_set and succ_set.issubset(R0):
+                        controlleur_idx[s_idx].append(inp)
+
+        # FIXED-POINT LOOP
+        iteration = 1
+        while R1 != R0:
+            iteration += 1
+            R0 = set(R1)
+
+            # Pre(R0)
+            pre0 = self.Pre_fast(R0)
+
+            # R1 = Q ∪ Pre(prev)
+            R1 = R0.union(pre0)
+
+            # For new states in R1 \ Q, add controller entries
+            for s_idx in R1:
+                if s_idx not in Q_idx and s_idx not in controlleur_idx:
+                    controlleur_idx[s_idx] = []
+                    for u_idx, inp in enumerate(self.symbolic.inputs):
+                        succ_set = self.product_succ.get(s_idx, {}).get(u_idx, set())
+                        if succ_set and succ_set.issubset(R0):
+                            controlleur_idx[s_idx].append(inp)
+
+            print(f"  Iteration {iteration}: |R| = {len(R1)}")
+
+        # Convert state indices back to ProductState objects
+        controlleur = {
+            self.product.states[s_idx]: inputs_list
+            for s_idx, inputs_list in controlleur_idx.items()
+        }
+
+        return controlleur
 
     def synthesize_reachability(self, target_set: Set[ProductState]) -> SymbolicController:
         """
-        Synthesize controller for reachability specification.
-
-        Args:
-            target_set: Set of product states to reach
-
-        Returns:
-            Controller that forces reaching target_set
+        Synthesize controller for reachability specification using your working method.
         """
         print(f"🎯 Synthesizing reachability controller for {len(target_set)} target states...")
 
-        # Convert to indices
-        target_indices = {self.product.state_to_idx[s] for s in target_set}
-
-        # R = set of states that can reach target
-        R = set(target_indices)
-        controller_dict = {}
-        iteration = 0
-
-        # Initialize with target states
-        for idx in target_indices:
-            state = self.product.states[idx]
-            controller_dict[state] = []
-
-        # Fixed point: add states that can force reaching R
-        while True:
-            iteration += 1
-            new_states = set()
-
-            # Find predecessors that can force reaching current R
-            for s_idx in range(self.product.n_states):
-                if s_idx in R:
-                    continue
-
-                for u_idx in range(self.symbolic.n_inputs):
-                    succs = self.product_succ.get(s_idx, {}).get(u_idx, set())
-                    if succs and all(s in R for s in succs):
-                        new_states.add(s_idx)
-                        # Store controller for this state
-                        state = self.product.states[s_idx]
-                        if state not in controller_dict:
-                            controller_dict[state] = []
-                        controller_dict[state].append(self.symbolic.inputs[u_idx])
-                        break
-
-            if not new_states:
-                break
-
-            R.update(new_states)
-            print(f"  Iteration {iteration}: added {len(new_states)} states, total |R| = {len(R)}")
+        # Get controller using your algorithm
+        controlleur_dict = self.pointFixeAtteignabilité_fast(target_set)
 
         # Build controller object
         controller = SymbolicController()
-        for state, inputs in controller_dict.items():
-            if inputs:  # Only add if there are allowed inputs
+        for state, inputs in controlleur_dict.items():
+            if inputs:
                 controller.add_control(state, inputs)
 
-        controller.winning_states = {self.product.states[idx] for idx in R}
+        # Winning states are all states in the controller
+        controller.winning_states = set(controlleur_dict.keys())
+
         print(f"✅ Reachability synthesis complete: {len(controller.winning_states)} winning states")
-
         return controller
-
-    def _pre_serial(self, state_indices: Set[int]) -> Set[int]:
-        """
-        Serial version of Pre computation.
-        No pickling issues, guaranteed to work.
-        """
-        if not state_indices:
-            return set()
-
-        pre = set()
-        n_states = self.product.n_states
-
-        for s_idx in range(n_states):
-            for u_idx in range(self.symbolic.n_inputs):
-                succs = self.product_succ.get(s_idx, {}).get(u_idx, set())
-                if succs and all(s in state_indices for s in succs):
-                    pre.add(s_idx)
-                    break
-
-        return pre
 
     def synthesize_automaton(self) -> SymbolicController:
         """
         Synthesize controller for general automaton specification.
+        This uses reachability to accepting states.
         """
         print("🤖 Synthesizing controller for automaton specification...")
 
-        # Step 1: Find winning region for Buchi condition
-        accepting_indices = {
-            idx for idx, state in enumerate(self.product.states)
-            if self.product.is_accepting(idx)
-        }
+        # Find accepting states in the product
+        accepting_states = set()
+        for state in self.product.states:
+            if state.auto_state in self.product.automaton.accepting:
+                accepting_states.add(state)
 
-        if not accepting_indices:
+        if not accepting_states:
             print("⚠️ No accepting states found, returning empty controller")
             return SymbolicController()
 
-        # Compute attractor of accepting states (serial version)
-        attractor = self._attractor_serial(accepting_indices)
+        print(f"🎯 Found {len(accepting_states)} accepting states")
 
-        # Build controller for attractor
-        controller = SymbolicController()
+        # Synthesize reachability controller to accepting states
+        return self.synthesize_reachability(accepting_states)
 
-        for idx in attractor:
-            state = self.product.states[idx]
-            allowed = []
-
-            for u_idx, inp in enumerate(self.symbolic.inputs):
-                succs = self.product_succ[idx][u_idx]
-                if succs and all(s in attractor for s in succs):
-                    allowed.append(inp)
-
-            if allowed:
-                controller.add_control(state, allowed)
-
-        controller.winning_states = {self.product.states[idx] for idx in attractor}
-        print(f"✅ Automaton synthesis complete: {len(controller.winning_states)} winning states")
-
-        return controller
-
-    def _attractor_serial(self, target_indices: Set[int]) -> Set[int]:
-        """
-        Serial version of attractor computation.
-        """
-        attractor = set(target_indices)
-        queue = deque(target_indices)
-        iteration = 0
-
-        while queue:
-            iteration += 1
-            idx = queue.popleft()
-
-            # Find predecessors that can force reaching attractor
-            for pred_idx in range(self.product.n_states):
-                if pred_idx in attractor:
-                    continue
-
-                for u_idx in range(self.symbolic.n_inputs):
-                    succs = self.product_succ.get(pred_idx, {}).get(u_idx, set())
-                    if succs and all(s in attractor for s in succs):
-                        attractor.add(pred_idx)
-                        queue.append(pred_idx)
-                        break
-
-            if iteration % 100 == 0:
-                print(f"  Attractor iteration {iteration}: |attractor| = {len(attractor)}")
-
-        return attractor
+    def _pre_serial(self, state_indices: Set[int]) -> Set[int]:
+        """Fallback serial Pre computation."""
+        return set(self.Pre_fast(state_indices))

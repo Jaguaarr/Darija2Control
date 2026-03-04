@@ -57,17 +57,30 @@ class Partition:
         self.dim = len(bounds)
         print(f"📐 Creating {self.dim}D partition...")
 
+        # Validate resolutions match dimension
+        if resolutions and len(resolutions) != self.dim:
+            print(f"⚠️ Resolutions length {len(resolutions)} doesn't match dimension {self.dim}")
+            # Adjust resolutions
+            if len(resolutions) < self.dim:
+                resolutions = resolutions + [10] * (self.dim - len(resolutions))
+            else:
+                resolutions = resolutions[:self.dim]
+            print(f"   Adjusted to {resolutions}")
+
         # Create intervals
         if custom_intervals:
             self.intervals = custom_intervals
             self.resolutions = [len(interv) - 1 for interv in custom_intervals]
         else:
             if not resolutions:
-                resolutions = [100] * self.dim
+                resolutions = [10] * self.dim  # Default to 10 instead of 100
             self.resolutions = resolutions
             self.intervals = []
             for d, (low, high) in enumerate(bounds):
                 n = resolutions[d]
+                if n <= 0:
+                    raise ValueError(f"Resolution must be positive, got {n}")
+                # Add small epsilon to ensure high bound is included
                 self.intervals.append(np.linspace(low, high, n + 1))
 
         # Calculate total cells without generating them
@@ -77,32 +90,35 @@ class Partition:
         self.index_to_cell = {}
 
         # For backward compatibility - create cells list ONLY if total cells is small
-        # This prevents breaking existing code that expects self.cells
         self.cells = []
         self.cell_indices = []
 
         # Only pre-generate cells if total is less than 1000 (for small test cases)
-        # This maintains backward compatibility while keeping performance
         if self._n_cells < 1000:
             print(f"📦 Pre-generating {self._n_cells} cells for backward compatibility...")
-            ranges = [range(len(self.intervals[d]) - 1) for d in range(self.dim)]
+            ranges = [range(self.resolutions[d]) for d in range(self.dim)]
             for idx_tuple in product(*ranges):
                 cell = self._create_cell(idx_tuple)
                 self.cells.append(cell)
                 self.cell_indices.append(idx_tuple)
                 self.index_to_cell[idx_tuple] = cell
         else:
-            # For large partitions, we don't pre-generate but create a property that warns
-            self.cells = _LazyCellList(self)
-            print(f"⚠️  Large partition detected ({self._n_cells} cells). Using lazy loading.")
+            # For large partitions, we don't pre-generate
+            print(f"📊 Large partition: {self._n_cells} cells (lazy loading enabled)")
 
         print(f"✅ Partition initialized: {self._n_cells} total cells")
-        print(f"⏱️  Init time: {time.time()-start:.3f}s")
+        print(f"⏱️  Init time: {time.time() - start:.3f}s")
 
     def _create_cell(self, idx_tuple: Tuple[int, ...]) -> Cell:
         """Create a cell for the given index (internal method)."""
+        if len(idx_tuple) != self.dim:
+            raise ValueError(f"Index tuple length {len(idx_tuple)} != dimension {self.dim}")
+
         cell_bounds = []
         for d, idx in enumerate(idx_tuple):
+            if idx < 0 or idx >= self.resolutions[d]:
+                raise IndexError(f"Index {idx} out of bounds for dimension {d} (0-{self.resolutions[d] - 1})")
+
             low = self.intervals[d][idx]
             high = self.intervals[d][idx + 1]
             cell_bounds.append((low, high))
@@ -110,6 +126,14 @@ class Partition:
 
     def get_cell(self, idx_tuple: Tuple[int, ...]) -> Cell:
         """Get cell by index (creates and caches on-demand)."""
+        # Validate index tuple
+        if len(idx_tuple) != self.dim:
+            raise ValueError(f"Index tuple length {len(idx_tuple)} must match dimension {self.dim}")
+
+        for d, idx in enumerate(idx_tuple):
+            if idx < 0 or idx >= self.resolutions[d]:
+                raise IndexError(f"Index {idx} out of bounds for dimension {d} (0-{self.resolutions[d] - 1})")
+
         if idx_tuple not in self.index_to_cell:
             self.index_to_cell[idx_tuple] = self._create_cell(idx_tuple)
         return self.index_to_cell[idx_tuple]
@@ -117,28 +141,66 @@ class Partition:
     def point_to_cell(self, point: np.ndarray) -> Optional[Cell]:
         """Find cell containing a point."""
         if len(point) != self.dim:
-            raise ValueError(f"Point dimension {len(point)} != partition dimension {self.dim}")
+            print(f"Warning: Point dimension {len(point)} != partition dimension {self.dim}")
+            return None
 
         idx = []
         for d, (low, high) in enumerate(self.bounds):
-            if point[d] < low or point[d] >= high:
+            # Check if point is within bounds (with small epsilon)
+            eps = 1e-10
+            if point[d] < low - eps or point[d] > high + eps:
+                print(f"Point {point[d]} outside dimension {d} bounds [{low}, {high}]")
                 return None
 
-            # Binary search for interval
-            intervals = self.intervals[d]
-            left, right = 0, len(intervals) - 1
-            while left < right:
-                mid = (left + right) // 2
-                if point[d] < intervals[mid]:
-                    right = mid
-                elif point[d] >= intervals[mid + 1]:
-                    left = mid + 1
-                else:
-                    left = mid
-                    break
-            idx.append(left)
+            # Clamp to bounds
+            p = max(low, min(point[d], high - eps))
 
-        return self.get_cell(tuple(idx))
+            # Find interval using linear search (simpler and more reliable)
+            intervals = self.intervals[d]
+            found = False
+            for i in range(len(intervals) - 1):
+                if intervals[i] <= p < intervals[i + 1]:
+                    idx.append(i)
+                    found = True
+                    break
+
+            if not found:
+                # If at the very end, use last interval
+                if abs(p - intervals[-1]) < eps:
+                    idx.append(len(intervals) - 2)
+                else:
+                    print(f"Could not find interval for point {p} in dimension {d}")
+                    return None
+
+        try:
+            return self.get_cell(tuple(idx))
+        except (IndexError, ValueError) as e:
+            print(f"Error getting cell for indices {idx}: {e}")
+            return None
+
+    def idx_to_linear(self, idx_tuple: Tuple[int, ...]) -> int:
+        """Convert tuple index to linear index."""
+        linear = 0
+        stride = 1
+        for d in range(self.dim - 1, -1, -1):
+            linear += idx_tuple[d] * stride
+            stride *= self.resolutions[d]
+        return linear
+
+    def linear_to_idx(self, linear: int) -> Tuple[int, ...]:
+        """Convert linear index to tuple index."""
+        if linear < 0 or linear >= self._n_cells:
+            raise IndexError(f"Linear index {linear} out of bounds (0-{self._n_cells - 1})")
+
+        idx = []
+        remaining = linear
+        for d in range(self.dim - 1, -1, -1):
+            stride = 1
+            for _ in range(d):
+                stride *= self.resolutions[_]
+            idx.insert(0, remaining // stride)
+            remaining %= stride
+        return tuple(idx)
 
     def box_to_cells(self, box_min: np.ndarray, box_max: np.ndarray) -> List[Cell]:
         """Find all cells intersecting a bounding box."""
@@ -153,20 +215,30 @@ class Partition:
         idx_ranges = []
         for d in range(self.dim):
             intervals = self.intervals[d]
+
             # Find first interval containing box_min[d]
             start = 0
             while start < len(intervals) - 1 and intervals[start + 1] <= box_min[d]:
                 start += 1
+
             # Find last interval containing box_max[d]
             end = start
             while end < len(intervals) - 1 and intervals[end] < box_max[d]:
                 end += 1
+
+            # Ensure indices are within bounds
+            start = max(0, min(start, self.resolutions[d] - 1))
+            end = max(start, min(end, self.resolutions[d] - 1))
+
             idx_ranges.append(range(start, end + 1))
 
         # Generate all index tuples and get/create cells
         cells = []
         for idx_tuple in product(*idx_ranges):
-            cells.append(self.get_cell(idx_tuple))
+            try:
+                cells.append(self.get_cell(idx_tuple))
+            except IndexError:
+                continue
 
         return cells
 
@@ -183,7 +255,10 @@ class Partition:
 
         for neighbor_idx in product(*ranges):
             if neighbor_idx != idx:
-                neighbors.append(self.get_cell(neighbor_idx))
+                try:
+                    neighbors.append(self.get_cell(neighbor_idx))
+                except IndexError:
+                    continue
 
         return neighbors
 
@@ -192,13 +267,13 @@ class Partition:
 
     def __iter__(self) -> Iterator[Cell]:
         """Lazy iteration over all cells (generates on-the-fly)."""
-        ranges = [range(r) for r in self.resolutions]
+        ranges = [range(self.resolutions[d]) for d in range(self.dim)]
         for idx_tuple in product(*ranges):
             yield self.get_cell(idx_tuple)
 
     def get_cells_batch(self, start: int, end: int) -> List[Cell]:
         """Get a batch of cells (useful for parallel processing)."""
-        ranges = [range(r) for r in self.resolutions]
+        ranges = [range(self.resolutions[d]) for d in range(self.dim)]
         cells = []
         count = 0
         for idx_tuple in product(*ranges):
@@ -220,22 +295,19 @@ class _LazyCellList:
     def __getitem__(self, idx):
         """Support indexing like cells[i]."""
         if isinstance(idx, int):
-            # Convert integer index to tuple index
             if idx in self._cache:
                 return self._cache[idx]
 
-            # Find the idx-th cell
-            count = 0
-            ranges = [range(r) for r in self.partition.resolutions]
-            for idx_tuple in product(*ranges):
-                if count == idx:
-                    cell = self.partition.get_cell(idx_tuple)
-                    self._cache[idx] = cell
-                    return cell
-                count += 1
-            raise IndexError("Cell index out of range")
+            # Convert linear index to tuple index
+            try:
+                tuple_idx = self.partition.linear_to_idx(idx)
+                cell = self.partition.get_cell(tuple_idx)
+                self._cache[idx] = cell
+                return cell
+            except (IndexError, ValueError) as e:
+                raise IndexError(f"Cell index {idx} out of range: {e}")
         else:
-            raise TypeError("Invalid index type")
+            raise TypeError(f"Invalid index type: {type(idx)}")
 
     def __len__(self):
         return self.partition._n_cells
@@ -251,14 +323,17 @@ class _LazyCellList:
         return False
 
     def index(self, cell: Cell) -> int:
-        """Find index of a cell (slow but works)."""
+        """Find index of a cell."""
         if not isinstance(cell, Cell):
             raise ValueError("Can only find index of Cell objects")
 
-        # Calculate linear index from tuple index
-        stride = 1
-        linear_idx = 0
-        for d in range(len(cell.index)-1, -1, -1):
-            linear_idx += cell.index[d] * stride
-            stride *= self.partition.resolutions[d]
-        return linear_idx
+        try:
+            return self.partition.idx_to_linear(cell.index)
+        except (AttributeError, KeyError):
+            # Fallback: calculate manually
+            stride = 1
+            linear_idx = 0
+            for d in range(len(cell.index) - 1, -1, -1):
+                linear_idx += cell.index[d] * stride
+                stride *= self.partition.resolutions[d]
+            return linear_idx

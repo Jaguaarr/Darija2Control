@@ -6,12 +6,13 @@
     <title>Symbolic Control Framework</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/numpy/1.24.0/numpy.min.js"></script>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🤖 Symbolic Control Framework</h1>
-            <p>N-Dimensional Symbolic Controller Synthesis with LLM Integration</p>
+            <h1>🤖 Symbolic Controller Synthesis</h1>
+            <p>N-Dimensional Symbolic Control with LLM Integration</p>
         </header>
 
         <div class="main-panel">
@@ -31,30 +32,122 @@
                     <button onclick="updateConfig()" class="primary-btn">Update Hardware</button>
                 </div>
 
-                <!-- ADDED: Robot Model Section -->
+                <!-- Robot Model Section with Custom Model Support -->
                 <div class="section">
                     <h3>Robot Model</h3>
-                    <select id="model_select">
-                        <option value="">Select a model...</option>
-                    </select>
 
-                    <div id="model_params" style="display:none;">
-                        <h4>Partition Resolution</h4>
-                        <div id="resolution_inputs"></div>
+                    <!-- Model Type Selection -->
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: inline-block; margin-right: 20px;">
+                            <input type="radio" name="model_type" value="predefined" checked onclick="toggleModelType()"> Predefined Model
+                        </label>
+                        <label style="display: inline-block;">
+                            <input type="radio" name="model_type" value="custom" onclick="toggleModelType()"> Custom Model
+                        </label>
                     </div>
 
-                    <button onclick="selectModel(event)" class="primary-btn" id="loadModelBtn">Load Model</button>
+                    <!-- Predefined Model Selection -->
+                    <div id="predefined_model_div">
+                        <select id="model_select" style="width: 100%;">
+                            <option value="">Select a model...</option>
+                        </select>
+                    </div>
+
+                    <!-- Custom Model Inputs (initially hidden) -->
+                    <div id="custom_model_div" style="display: none;">
+                        <h4>Custom Model Parameters</h4>
+
+                        <label>Model Name:</label>
+                        <input type="text" id="custom_model_name" placeholder="e.g., my_robot" value="my_robot">
+
+                        <div style="display: flex; gap: 10px; margin-top: 10px;">
+                            <div style="flex: 1;">
+                                <label>State Dimension:</label>
+                                <input type="number" id="state_dim" min="1" max="10" value="2" onchange="updateCustomInputs()">
+                            </div>
+                            <div style="flex: 1;">
+                                <label>Input Dimension:</label>
+                                <input type="number" id="input_dim" min="1" max="10" value="1" onchange="updateCustomInputs()">
+                            </div>
+                        </div>
+
+                        <!-- Dynamics Equations -->
+                        <div id="dynamics_container" style="margin-top: 15px;">
+                            <h4>Dynamics Equations</h4>
+                            <p style="font-size: 0.85em; color: #666;">
+                                Use x0, x1, ... for states and u0, u1, ... for inputs.<br>
+                                Available functions: sin, cos, tan, exp, log, sqrt, pi
+                            </p>
+                            <div id="equations_list"></div>
+                        </div>
+
+                        <!-- State Bounds -->
+                        <div style="margin-top: 15px;">
+                            <h4>State Bounds</h4>
+                            <div id="bounds_list"></div>
+                        </div>
+
+                        <!-- Input Values -->
+                        <div style="margin-top: 15px;">
+                            <h4>Input Values (comma-separated per dimension)</h4>
+                            <p style="font-size: 0.85em; color: #666;">
+                                Example for 2D input: [0.5,1.0] for u0, [-1,0,1] for u1
+                            </p>
+                            <div id="inputs_list"></div>
+                        </div>
+
+                        <!-- Disturbance Bounds -->
+                        <div style="margin-top: 15px;">
+                            <h4>Disturbance Bounds (per dimension)</h4>
+                            <div id="disturbance_list"></div>
+                        </div>
+                    </div>
+
+                    <!-- Resolution Inputs (for both model types) -->
+                    <div id="resolution_container" style="margin-top: 15px; display: none;">
+                        <h4>Partition Resolution</h4>
+                        <p style="font-size: 0.85em; color: #666;">
+                            Number of cells per dimension. Higher = more precise but slower.
+                        </p>
+                        <div id="resolution_inputs"></div>
+                        <div id="cell_estimate" style="margin-top: 10px;">
+                            <strong>Total cells:</strong> <span id="cell_count">0</span>
+                        </div>
+                        <div style="display: flex; gap: 5px; margin-top: 10px;">
+                            <button onclick="setResolution(10)" class="secondary-btn" style="flex: 1;">Test (10³)</button>
+                            <button onclick="setResolution(20)" class="secondary-btn" style="flex: 1;">Quick (20³)</button>
+                            <button onclick="setResolution(50)" class="secondary-btn" style="flex: 1;">Medium (50³)</button>
+                        </div>
+                    </div>
+
+                    <button onclick="loadModel()" class="primary-btn" id="loadModelBtn" style="margin-top: 15px;">Load Model</button>
                     <div id="model_status" class="status-box"></div>
                 </div>
 
-                <div class="section">
-                    <h3>Workspace</h3>
+                <!-- Workspace Section (for 2D models) -->
+                <div class="section" id="workspace_section">
+                    <h3>Workspace (2D)</h3>
                     <canvas id="workspace_canvas" width="400" height="400"></canvas>
                     <div class="button-group">
                         <button onclick="drawRectangle()" class="secondary-btn">Draw Region</button>
                         <button onclick="clearCanvas()" class="secondary-btn">Clear</button>
                     </div>
                     <div id="region_list" class="region-list"></div>
+                </div>
+
+                <!-- High-Dimensional Region Definition -->
+                <div id="high_dim_regions" style="display: none; margin-top: 20px;">
+                    <h3>Define Regions by Coordinates</h3>
+                    <p style="font-size: 0.85em; color: #666;">
+                        Since your model has more than 2 dimensions, define regions by entering coordinates.
+                    </p>
+                    <div id="region_coords_container">
+                        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                            <input type="text" id="region_name_input" placeholder="Region name" style="flex: 1;">
+                            <button onclick="addRegionByCoords()" class="secondary-btn">Add Region</button>
+                        </div>
+                    </div>
+                    <div id="region_coords_list" class="region-list"></div>
                 </div>
             </div>
 
@@ -66,7 +159,7 @@
                     <h3>Natural Language Prompt</h3>
                     <textarea id="prompt_input" rows="4"
                         placeholder="Describe what you want the robot to do... (e.g., 'Go to red region, then go to blue region')"></textarea>
-                    <button onclick="generateAutomaton()" class="primary-btn" id="generateBtn">Generate Automaton</button>
+                    <button onclick="generateAutomaton()" class="primary-btn" id="generateBtn" disabled>Generate Automaton</button>
                 </div>
 
                 <div class="section" id="automaton_display" style="display:none;">
@@ -93,8 +186,10 @@
 
                 <div class="section">
                     <h3>Initial State</h3>
-                    <div id="initial_state_inputs" class="state-inputs"></div>
-                    <button onclick="runSimulation(event)" class="primary-btn" id="simulateBtn" disabled>Run Simulation</button>
+                    <div style="display: flex; gap: 10px; margin-top: 10px;">
+                        <button onclick="findValidStart()" class="secondary-btn" id="findStartBtn">🎯 Find Valid Start</button>
+                        <button onclick="runSimulation(event)" class="primary-btn" id="simulateBtn" disabled>Run Simulation</button>
+                    </div>
                 </div>
 
                 <div class="section">
@@ -127,37 +222,11 @@
             const entry = document.createElement('div');
             entry.textContent = new Date().toLocaleTimeString() + ': ' + message;
             log.appendChild(entry);
-            // Keep only last 10 messages
             while (log.children.length > 10) {
                 log.removeChild(log.firstChild);
             }
         }
     }
-
-    // Override functions with debug logging
-    const originalBuild = buildAbstraction;
-    window.buildAbstraction = function(e) {
-        debugLog('Building abstraction with regions: ' + JSON.stringify(regions));
-        return originalBuild(e);
-    };
-
-    const originalSynthesize = synthesize;
-    window.synthesize = function(e) {
-        debugLog('Synthesizing controller...');
-        return originalSynthesize(e);
-    };
-
-    const originalGenerate = generateAutomaton;
-    window.generateAutomaton = function() {
-        debugLog('Generating automaton...');
-        return originalGenerate();
-    };
-
-    const originalRunSim = runSimulation;
-    window.runSimulation = function(e) {
-        debugLog('Running simulation...');
-        return originalRunSim(e);
-    };
 
     // Toggle debug panel with Ctrl+Shift+D
     document.addEventListener('keydown', function(e) {
@@ -173,6 +242,9 @@
         debugLog('Page loaded, initializing...');
         if (typeof loadConfig === 'function') loadConfig();
         if (typeof setupCanvas === 'function') setupCanvas();
+
+        // Initialize with 2D default
+        updateCustomInputs();
     });
     </script>
 </body>

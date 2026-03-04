@@ -1,7 +1,8 @@
 """Robot models library for N-dimensional dynamics."""
 from abc import ABC, abstractmethod
 import numpy as np
-from typing import Callable, List, Tuple, Dict, Any
+from typing import Callable, List, Tuple, Dict, Any, Optional
+import re
 
 
 class RobotModel(ABC):
@@ -89,6 +90,9 @@ class DifferentialDrive(RobotModel):
     def get_disturbance_bounds(self) -> np.ndarray:
         return np.array([0.05, 0.05, 0.05])
 
+    def get_description(self) -> str:
+        return "2D differential drive robot: state=[x, y, theta], inputs=[v, omega]"
+
 
 class ArmRobot(RobotModel):
     """N-DOF robotic arm."""
@@ -137,10 +141,81 @@ class ArmRobot(RobotModel):
     def get_disturbance_bounds(self) -> np.ndarray:
         return np.array([0.01] * (2 * self.num_joints))
 
+    def get_description(self) -> str:
+        return f"{self.num_joints}-DOF robotic arm: state=[q1...q{self.num_joints}, q1_dot...q{self.num_joints}_dot], inputs=[acc1...acc{self.num_joints}]"
+
+
+class CustomRobotModel(RobotModel):
+    """User-defined custom robot model with pickle support."""
+
+    def __init__(self, name: str, state_dim: int, input_dim: int,
+                 dynamics_func, state_bounds: List[Tuple[float, float]],
+                 input_values: List[np.ndarray], disturbance_bounds: np.ndarray,
+                 state_names: Optional[List[str]] = None,
+                 input_names: Optional[List[str]] = None):
+        super().__init__(name, state_dim, input_dim)
+        self._dynamics_func = dynamics_func
+        self._state_bounds = state_bounds
+        self._input_values = input_values
+        self._disturbance_bounds = disturbance_bounds
+
+        if state_names:
+            self.state_names = state_names
+        if input_names:
+            self.input_names = input_names
+
+    def dynamics(self, x: np.ndarray, u: np.ndarray, w: np.ndarray) -> np.ndarray:
+        return self._dynamics_func(x, u, w)
+
+    def get_state_bounds(self) -> List[Tuple[float, float]]:
+        return self._state_bounds
+
+    def get_inputs(self) -> List[np.ndarray]:
+        return self._input_values
+
+    def get_disturbance_bounds(self) -> np.ndarray:
+        return self._disturbance_bounds
+
+    def __getstate__(self):
+        """Custom pickling - store only the necessary data."""
+        return {
+            'name': self.name,
+            'state_dim': self.state_dim,
+            'input_dim': self.input_dim,
+            'state_names': self.state_names,
+            'input_names': self.input_names,
+            'state_bounds': self._state_bounds,
+            'input_values': self._input_values,
+            'disturbance_bounds': self._disturbance_bounds,
+            'dynamics_func': self._dynamics_func.__getstate__() if hasattr(self._dynamics_func,
+                                                                           '__getstate__') else None
+        }
+
+    def __setstate__(self, state):
+        """Custom unpickling."""
+        self.name = state['name']
+        self.state_dim = state['state_dim']
+        self.input_dim = state['input_dim']
+        self.state_names = state['state_names']
+        self.input_names = state['input_names']
+        self._state_bounds = state['state_bounds']
+        self._input_values = state['input_values']
+        self._disturbance_bounds = state['disturbance_bounds']
+
+        # Recreate dynamics function
+        from custom_dynamics import CustomDynamics
+        dynamics_data = state['dynamics_func']
+        if dynamics_data:
+            self._dynamics_func = CustomDynamics(
+                dynamics_data['equations'],
+                dynamics_data['state_dim'],
+                dynamics_data['input_dim']
+            )
 
 # Model registry
 MODEL_REGISTRY = {
     "differential_drive": DifferentialDrive,
     "2DOF_arm": lambda: ArmRobot(2),
     "3DOF_arm": lambda: ArmRobot(3),
+    "custom": "custom"  # Special flag for custom model
 }

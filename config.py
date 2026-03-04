@@ -8,8 +8,8 @@ from typing import Optional, Dict, Any
 @dataclass
 class HardwareConfig:
     """Hardware configuration for parallelization."""
-    num_cpu_cores: int = 4
-    use_gpu: bool = False
+    num_cpu_cores: int = 8
+    use_gpu: bool = True
     gpu_device_id: int = 0
 
 

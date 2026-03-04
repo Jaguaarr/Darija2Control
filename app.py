@@ -314,14 +314,17 @@ def synthesize():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/simulate', methods=['POST'])
+@app.route('/api/simulate', methods=['POST'])
 def simulate():
     """Run simulation."""
+    global current_model, current_symbolic, current_controller, current_automaton
+
     data = request.json
     if not data:
         return jsonify({'error': 'No data provided'}), 400
 
     initial_state = np.array(data.get('initial_state', [0, 0, 0]))
-    num_steps = data.get('num_steps', 100)
+    num_steps = data.get('num_steps', 200)
     noise_scale = data.get('noise_scale', 0.0)
 
     if current_controller is None:
@@ -334,12 +337,22 @@ def simulate():
         return jsonify({'error': 'No symbolic model built'}), 400
 
     try:
+        print(f"\n{'=' * 50}")
+        print(f"🚀 SIMULATION REQUEST")
+        print(f"{'=' * 50}")
+        print(f"Initial state: {initial_state}")
+        print(f"Steps: {num_steps}")
+        print(f"Controller winning states: {len(current_controller.winning_states)}")
+
         # Create simulator
+        from simulation import Simulator
         simulator = Simulator(current_model, current_symbolic,
-                            current_controller, current_automaton)
+                              current_controller, current_automaton)
 
         # Run simulation
         trajectory = simulator.simulate(num_steps, initial_state, noise_scale)
+
+        print(f"\n✅ Simulation complete: {len(trajectory)} points")
 
         # Convert to list for JSON
         traj_list = [state.tolist() for state in trajectory]
@@ -351,9 +364,97 @@ def simulate():
         })
 
     except Exception as e:
+        print(f"❌ Simulation error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/load_custom_model', methods=['POST'])
+def load_custom_model():
+    """Load custom user-defined model."""
+    global current_model, current_partition, current_config
+
+    data = request.json
+
+    try:
+        from custom_dynamics import CustomDynamics
+        from models import CustomRobotModel
+
+        state_dim = data['state_dim']
+        input_dim = data['input_dim']
+        equations = data['equations']
+
+        print(f"🔧 Creating custom model: {data['name']}")
+        print(f"  State dimension: {state_dim}")
+        print(f"  Input dimension: {input_dim}")
+        print(f"  Equations: {equations}")
+
+        # Create dynamics function container (picklable)
+        dynamics_container = CustomDynamics(equations, state_dim, input_dim)
+
+        # Create input list
+        inputs = [np.array(inp, dtype=np.float64) for inp in data['inputs']]
+        print(f"  Inputs: {len(inputs)} combinations")
+
+        # Create state bounds
+        state_bounds = data['state_bounds']
+        print(f"  State bounds: {state_bounds}")
+
+        # Create disturbance bounds
+        disturbance_bounds = np.array(data['disturbance_bounds'], dtype=np.float64)
+        print(f"  Disturbance bounds: {disturbance_bounds}")
+
+        # Create model
+        current_model = CustomRobotModel(
+            name=data['name'],
+            state_dim=state_dim,
+            input_dim=input_dim,
+            dynamics_func=dynamics_container,
+            state_bounds=state_bounds,
+            input_values=inputs,
+            disturbance_bounds=disturbance_bounds
+        )
+
+        # Get resolutions
+        resolutions = data.get('resolutions', [10] * state_dim)
+        print(f"  Resolutions: {resolutions}")
+
+        # Create partition
+        current_partition = Partition(
+            state_bounds,
+            resolutions=resolutions
+        )
+
+        # Store regions (for high-D, these are coordinate-based)
+        if state_dim > 2:
+            current_config.regions = data.get('regions', {})
+            print(f"  Regions (high-D): {len(current_config.regions)}")
+        else:
+            # For 2D, regions are handled by canvas
+            print(f"  Regions (2D): {len(data.get('regions', {}))}")
+
+        total_cells = len(current_partition)
+        print(f"✅ Custom model loaded: {total_cells} cells")
+
+        return jsonify({
+            'status': 'success',
+            'state_dim': state_dim,
+            'input_dim': input_dim,
+            'n_cells': total_cells,
+            'state_names': [f"x{i}" for i in range(state_dim)],
+            'input_names': [f"u{i}" for i in range(input_dim)]
+        })
+
+    except Exception as e:
+        print(f"❌ Error loading custom model: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+
+@app.route('/api/visualize', methods=['POST'])
 @app.route('/api/visualize', methods=['POST'])
 def visualize():
     """Generate visualization."""
@@ -386,32 +487,54 @@ def visualize():
 
         # Plot regions if available
         if regions:
+            print(f"📦 Plotting regions: {list(regions.keys())}")
+
             # Generate colors for regions
-            colors = ['#ff9999', '#99ff99', '#9999ff', '#ffff99', '#ff99ff']
+            colors = ['#ff9999', '#99ff99', '#9999ff', '#ffff99', '#ff99ff', '#ffcc99']
+
             for i, (region_name, bounds) in enumerate(regions.items()):
                 color = colors[i % len(colors)]
 
-                # Plot region as rectangle
-                if len(bounds) >= 2:
-                    x1, x2 = bounds[0]
-                    y1, y2 = bounds[1]
-                    rect = plt.Rectangle(
-                        (x1, y1), x2 - x1, y2 - y1,
-                        facecolor=color, alpha=0.3, edgecolor=color, linewidth=2,
-                        label=region_name
-                    )
-                    ax.add_patch(rect)
+                print(f"  Region {region_name}: {bounds}")
 
-                    # Add region name
-                    ax.text(x1 + (x2 - x1) / 2, y1 + (y2 - y1) / 2, region_name,
-                            ha='center', va='center', fontsize=10, fontweight='bold',
-                            color='black', bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.3'))
+                # Handle different bounds formats
+                try:
+                    # Check if bounds is a list of lists/tuples
+                    if isinstance(bounds, list) and len(bounds) >= 2:
+                        # Extract first two dimensions for 2D visualization
+                        if isinstance(bounds[0], (list, tuple)) and len(bounds[0]) >= 2:
+                            # Format: [[xmin, xmax], [ymin, ymax], ...]
+                            x1, x2 = bounds[0][0], bounds[0][1]
+                            y1, y2 = bounds[1][0], bounds[1][1]
+                        else:
+                            # Try alternative format: [xmin, xmax, ymin, ymax, ...]
+                            x1, x2 = bounds[0], bounds[1]
+                            y1, y2 = bounds[2], bounds[3] if len(bounds) >= 4 else (0, 0)
+
+                        # Plot region as rectangle
+                        rect = plt.Rectangle(
+                            (x1, y1), x2 - x1, y2 - y1,
+                            facecolor=color, alpha=0.3, edgecolor=color, linewidth=2,
+                            label=region_name
+                        )
+                        ax.add_patch(rect)
+
+                        # Add region name
+                        ax.text(x1 + (x2 - x1) / 2, y1 + (y2 - y1) / 2, region_name,
+                                ha='center', va='center', fontsize=10, fontweight='bold',
+                                color='black', bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.3'))
+                    else:
+                        print(f"⚠️ Invalid bounds format for region {region_name}: {bounds}")
+
+                except Exception as e:
+                    print(f"⚠️ Error plotting region {region_name}: {e}")
+                    continue
 
         # Plot workspace bounds if available
         if current_model:
             bounds = current_model.get_state_bounds()
-            ax.set_xlim(bounds[0])
-            ax.set_ylim(bounds[1])
+            ax.set_xlim(bounds[0][0], bounds[0][1])
+            ax.set_ylim(bounds[1][0], bounds[1][1])
         else:
             ax.set_xlim(0, 10)
             ax.set_ylim(0, 10)
@@ -468,6 +591,8 @@ def visualize():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/export_controller', methods=['GET'])
 def export_controller():
     """Export controller as JSON."""
@@ -524,6 +649,56 @@ def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
 
+@app.route('/api/find_valid_start', methods=['POST'])
+def find_valid_start():
+    """Find a valid starting state that is in the winning set."""
+    global current_controller, current_partition, current_model, current_automaton
+
+    if current_controller is None:
+        return jsonify({'error': 'No controller synthesized'}), 400
+
+    if current_partition is None:
+        return jsonify({'error': 'No partition'}), 400
+
+    try:
+        # Get winning states
+        winning_states = list(current_controller.winning_states)
+
+        if not winning_states:
+            return jsonify({'error': 'No winning states'}), 400
+
+        # Pick a random winning state
+        import random
+        start_state = random.choice(winning_states)
+
+        # Get cell index
+        cell_idx = start_state.cell_idx
+
+        # Convert linear index to tuple index
+        resolutions = current_partition.resolutions
+        tuple_idx = []
+        remaining = cell_idx
+        for d in range(len(resolutions) - 1, -1, -1):
+            stride = 1
+            for _ in range(d):
+                stride *= resolutions[_]
+            tuple_idx.insert(0, remaining // stride)
+            remaining %= stride
+
+        # Get cell and its center
+        cell = current_partition.get_cell(tuple(tuple_idx))
+        center = cell.center()
+
+        return jsonify({
+            'status': 'success',
+            'auto_state': start_state.auto_state,
+            'cell_idx': cell_idx,
+            'center': center.tolist()
+        })
+
+    except Exception as e:
+        print(f"Error finding valid start: {e}")
+        return jsonify({'error': str(e)}), 500
 if __name__ == '__main__':
     # Load environment variables from .env file
     from dotenv import load_dotenv
