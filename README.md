@@ -15,5 +15,5 @@ A modular, layered framework for N-dimensional symbolic controller synthesis wit
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/symbolic-control-framework.git
+git clone https://github.com/Jaguaarr/symbolic-control-framework.git
 cd symbolic-control-framework
